@@ -4,80 +4,97 @@ import google.generativeai as genai
 import io
 
 # --- 1. 配置与初始化 ---
-st.set_page_config(page_title="AI FB 素材扩展器", layout="wide")
+st.set_page_config(page_title="FB素材AI二次创作预览", layout="wide")
 
-# 修复之前的引号语法错误
+# 配置 API
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    st.error("未在 Secrets 中找到 GEMINI_API_KEY，请检查设置。")
+    st.warning("⚠️ 提示：未检测到 API Key，预览功能正常，但 AI 分析建议将无法显示。")
 
-# Facebook 版位尺寸参考
+# Facebook 2026 核心版位尺寸
 FB_SIZES = {
     "Stories/Reels (9:16)": (1080, 1920),
-    "Feed (1:1)": (1080, 1080),
-    "Feed/Ads (4:5)": (1080, 1350)
+    "Feed/Post (1:1)": (1080, 1080),
+    "Feed/Ads (4:5)": (1080, 1350),
+    "Ads Landscape (1.91:1)": (1200, 628)
 }
 
-# --- 2. 核心 AI 逻辑函数 ---
-def generate_ai_description(source_img, target_size):
+def generate_ai_description(source_img, target_size_name):
     """
-    使用 Gemini 分析图片并生成用于 Outpainting 的二次创作描述
+    使用 Gemini 分析图片并针对特定版位给出二次创作建议
     """
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"""
-    分析这张图片的内容。如果我要将它放在一个 {target_size[0]}x{target_size[1]} 的画布中央，
-    并自动扩展边缘空白区域，请描述应该补充什么内容以保持风格统一。
-    请以“补充内容建议：”开头。
-    """
-    response = model.generate_content([prompt, source_img])
-    return response.text
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        分析这张图片。我需要将其适配为 Facebook 的 {target_size_name} 版位。
+        请基于原图的纹理、色彩和元素，给出具体的【二次创作背景扩展建议】。
+        要求：
+        1. 保持主体内容不变。
+        2. 描述应该在空白区域补充哪些具体的视觉元素，使其看起来像是一张原生的大图。
+        3. 语言简练，直击痛点。
+        """
+        response = model.generate_content([prompt, source_img])
+        return response.text
+    except Exception as e:
+        return f"AI 构思暂不可用: {str(e)}"
 
-# --- 3. Streamlit UI 界面渲染 ---
-st.title("🚀 AI Facebook 素材自动扩展与预览")
-st.write("上传图片，AI 将分析并模拟如何二次创作不同尺寸的版位。")
+def create_preview(image, target_size, bg_color=(245, 245, 245)):
+    """
+    生成预览图：将原图等比例缩放并居中放置在指定版位画布上
+    """
+    tw, th = target_size
+    canvas = PIL.Image.new("RGB", target_size, bg_color)
+    
+    # 缩放原图以契合画布（Contain 模式）
+    img_copy = image.copy()
+    img_copy.thumbnail((tw, th), PIL.Image.LANCZOS)
+    
+    # 计算居中坐标
+    offset = ((tw - img_copy.width) // 2, (th - img_copy.height) // 2)
+    canvas.paste(img_copy, offset)
+    return canvas
 
-# 侧边栏设置
+# --- 2. UI 渲染 ---
+st.title("🎯 FB 素材二次创作预览器")
+st.write("不改变原图内容，一键生成所有版位占位预览，并获取 AI 背景扩展建议。")
+
 with st.sidebar:
-    st.header("参数设置")
+    st.header("⚙️ 样式设置")
     selected_placements = st.multiselect(
         "选择版位", 
         list(FB_SIZES.keys()), 
-        default=["Stories/Reels (9:16)"]
+        default=["Stories/Reels (9:16)", "Feed/Post (1:1)"]
     )
+    bg_mode = st.selectbox("预览画布底色", ["浅灰色", "纯白色", "黑色"])
+    bg_color_map = {"浅灰色": (245, 245, 245), "纯白色": (255, 255, 255), "黑色": (0, 0, 0)}
+    current_bg = bg_color_map[bg_mode]
 
-# 文件上传
-uploaded_file = st.file_uploader("上传原始图片素材", type=['png', 'jpg', 'jpeg'])
+uploaded_file = st.file_uploader("📥 上传图片素材", type=['png', 'jpg', 'jpeg'])
 
 if uploaded_file:
-    # 展示原图
     source_img = PIL.Image.open(uploaded_file)
-    st.subheader("✅ 原图已上传")
-    st.image(source_img, width=300)
-
-    if st.button("执行 AI 风格分析与尺寸扩展预览"):
-        # 创建多列预览
+    
+    # 点击执行
+    if st.button("✨ 一键生成版位预览及 AI 创作方案", use_container_width=True):
+        st.write("---")
+        # 创建网格
         cols = st.columns(len(selected_placements))
         
         for idx, p_name in enumerate(selected_placements):
             with cols[idx]:
-                st.write(f"**{p_name}**")
-                target_size = FB_SIZES[p_name]
+                st.markdown(f"**{p_name}**")
+                target_dims = FB_SIZES[p_name]
                 
-                # 模拟处理：1. 缩放居中预览
-                # 这里目前使用 Python 先渲染一个预览图给用户看
-                canvas = PIL.Image.new("RGB", target_size, (240, 240, 240)) # 灰色背景模拟空白
-                img_copy = source_img.copy()
-                img_copy.thumbnail((target_size[0], target_size[1]))
-                offset = ((target_size[0] - img_copy.width) // 2, (target_size[1] - img_copy.height) // 2)
-                canvas.paste(img_copy, offset)
+                # 1. 生成预览图（不展示原图，直接展示在画布里的样子）
+                preview_img = create_preview(source_img, target_dims, current_bg)
+                st.image(preview_img, use_container_width=True, caption=f"尺寸: {target_dims[0]}x{target_dims[1]}")
                 
-                st.image(canvas, use_container_width=True)
-                
-                # 2. 调用 AI 生成二次创作建议
-                with st.spinner(f"AI 正在构思 {p_name} 的扩展方案..."):
-                    ai_advice = generate_ai_description(source_img, target_size)
-                    st.info(ai_advice)
+                # 2. 调用 AI 给出该版位的扩展方案
+                with st.expander("👁️ AI 二次创作构思", expanded=True):
+                    with st.spinner("构思中..."):
+                        advice = generate_ai_description(source_img, p_name)
+                        st.write(advice)
 
 else:
-    st.info("请在上方上传图片以开始。")
+    st.info("💡 请先上传一张图片，我们将为您生成所有 Facebook 版位的预览。")
