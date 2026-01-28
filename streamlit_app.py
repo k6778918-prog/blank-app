@@ -1,80 +1,70 @@
 import streamlit as st
-from PIL import Image, ImageFilter
+from PIL import Image
 import os
 import zipfile
 from io import BytesIO
 
-# --- 配置：Facebook 2026 最新版位尺寸 ---
+# --- 配置：Facebook 版位尺寸 ---
 FB_SIZES = {
     "Feed (1:1) - 正方形": (1080, 1080),
     "Feed/Ads (4:5) - 纵向": (1080, 1350),
     "Stories/Reels (9:16) - 全屏": (1080, 1920),
-    "Landscape (1.91:1) - 横向": (1200, 628)
+    "Ads (1.91:1) - 横向广告": (1200, 628)
 }
 
-def process_image_smart(image, target_size):
+def process_image_no_blur(image, target_size, bg_color=(255, 255, 255)):
     """
-    核心逻辑：保持主体完整，使用高斯模糊填充背景
+    不裁剪、不模糊：等比例缩放并在剩余空间填充纯色
     """
     target_w, target_h = target_size
-    # 统一转为 RGB 模式，避免处理 PNG 透明层时报错
+    # 统一转为 RGB
     if image.mode in ("RGBA", "P"):
         image = image.convert("RGB")
     
     img_w, img_h = image.size
 
-    # 1. 缩放主体：确保原图内容 100% 完整显示
+    # 1. 计算缩放比例，确保图片完全包含在画布内
     ratio = min(target_w / img_w, target_h / img_h)
     new_w = int(img_w * ratio)
     new_h = int(img_h * ratio)
-    resized_main = image.resize((new_w, new_h), Image.LANCZOS)
+    resized_img = image.resize((new_w, new_h), Image.LANCZOS)
 
-    # 2. 生成背景：放大并模糊
-    bg_ratio = max(target_w / img_w, target_h / img_h)
-    bg_w = int(img_w * bg_ratio)
-    bg_h = int(img_h * bg_ratio)
-    background = image.resize((bg_w, bg_h), Image.LANCZOS)
+    # 2. 创建纯色背景画布
+    canvas = Image.new("RGB", (target_w, target_h), bg_color)
     
-    # 居中裁剪背景
-    left = (bg_w - target_w) / 2
-    top = (bg_h - target_h) / 2
-    background = background.crop((left, top, left + target_w, top + target_h))
-    
-    # 施加高斯模糊 (radius=30 是比较自然的社交媒体风格)
-    background = background.filter(ImageFilter.GaussianBlur(radius=30))
-
-    # 3. 合成：将缩小的主体贴在模糊背景中央
+    # 3. 将原图粘贴在中心
     offset = ((target_w - new_w) // 2, (target_h - new_h) // 2)
-    background.paste(resized_main, offset)
+    canvas.paste(resized_img, offset)
     
-    return background
+    return canvas
 
-# --- Streamlit UI 界面 ---
-st.set_page_config(page_title="FB素材智能转换器", page_icon="🖼️")
+# --- Streamlit UI ---
+st.set_page_config(page_title="FB尺寸无损助手", page_icon="🎯")
 
-st.title("🖼️ Facebook 素材批量智能转换器")
-st.markdown("""
-**功能说明：** 上传任意比例图片，系统将自动生成适配 FB 不同版位的尺寸。
-* ✅ **内容不丢失**：原图 100% 完整保留，不进行暴力裁剪。
-* ✅ **智能填充**：空白处自动使用原图色彩进行高斯模糊填充。
-""")
+st.title("🎯 FB 素材尺寸一键生成 (无损模式)")
+st.info("模式：保持原图比例不被裁剪，空白处填充纯色。")
 
 with st.sidebar:
-    st.header("设置")
+    st.header("⚙️ 配置参数")
     selected_placements = st.multiselect(
-        "选择需要生成的版位：", 
+        "选择输出版位：", 
         list(FB_SIZES.keys()), 
-        default=["Feed (1:1) - 正方形", "Stories/Reels (9:16) - 全屏"]
+        default=list(FB_SIZES.keys())
     )
-    quality = st.slider("导出质量", 50, 100, 90)
+    
+    bg_choice = st.radio("填充背景颜色：", ("白色", "黑色"))
+    color_map = {"白色": (255, 255, 255), "黑色": (0, 0, 0)}
+    bg_color = color_map[bg_choice]
+    
+    quality = st.slider("导出质量", 50, 100, 95)
 
-uploaded_files = st.file_uploader("上传图片 (支持多选)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("上传图片", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.button(f"开始处理 {len(uploaded_files)} 张图片"):
+    if st.button(f"生成 {len(uploaded_files) * len(selected_placements)} 张素材"):
         zip_buffer = BytesIO()
         
-        with st.status("正在处理图片...", expanded=True) as status:
+        with st.spinner("处理中..."):
             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
                 for uploaded_file in uploaded_files:
                     img = Image.open(uploaded_file)
@@ -82,21 +72,20 @@ if uploaded_files:
                     
                     for p_name in selected_placements:
                         target_dims = FB_SIZES[p_name]
-                        # 执行智能转换
-                        processed_img = process_image_smart(img, target_dims)
+                        # 执行无损填充转换
+                        final_img = process_image_no_blur(img, target_dims, bg_color)
                         
-                        # 保存到内存
+                        # 保存
                         buf = BytesIO()
-                        processed_img.save(buf, format="JPEG", quality=quality)
-                        file_path = f"{base_name}/{p_name.split(' ')[0]}.jpg"
-                        zip_file.writestr(file_path, buf.getvalue())
-            
-            status.update(label="全部处理完成！", state="complete", expanded=False)
-
-        st.success("🎉 所有图片已准备就绪")
+                        final_img.save(buf, format="JPEG", quality=quality)
+                        # 文件夹分类：原图名/版位名.jpg
+                        clean_p_name = p_name.split(' ')[0].replace("/", "-")
+                        zip_file.writestr(f"{base_name}/{clean_p_name}.jpg", buf.getvalue())
+        
+        st.success("处理完成！")
         st.download_button(
-            label="📥 点击下载全部压缩包 (ZIP)",
+            label="📥 下载全尺寸素材包",
             data=zip_buffer.getvalue(),
-            file_name="facebook_assets_output.zip",
+            file_name="fb_batch_assets.zip",
             mime="application/zip"
         )
