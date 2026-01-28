@@ -1,98 +1,55 @@
-import streamlit as st
-from PIL import Image
+import PIL.Image
+import google.generativeai as genai
 import os
-import zipfile
-from io import BytesIO
 
-# --- 配置：Facebook 版位尺寸 ---
-FB_SIZES = {
-    "Feed (1:1) 正方形": (1080, 1080),
-    "Feed/Ads (4:5) 纵向": (1080, 1350),
-    "Stories/Reels (9:16) 竖屏": (1080, 1920),
-    "Ads (1.91:1) 横向": (1200, 628)
-}
+# 配置 Gemini API (需在 Google AI Studio 获取 API Key)
+genai.configure(api_key="AIzaSyDpRgTOj912pPfhY56noe60LSuV3s0tyl4")
 
-def process_image_no_blur(image, target_size, bg_color=(255, 255, 255)):
-    """处理核心：等比例缩放并填充背景"""
-    target_w, target_h = target_size
-    if image.mode in ("RGBA", "P"):
-        image = image.convert("RGB")
+def generate_outpainted_asset(source_image_path, target_size=(1080, 1920)):
+    """
+    使用 AI 扩展图片背景以适配 Facebook 版位
+    """
+    # 1. 加载原图
+    source_img = PIL.Image.open(source_image_path)
+    src_w, src_h = source_img.size
     
-    img_w, img_h = image.size
-    ratio = min(target_w / img_w, target_h / img_h)
-    new_w, new_h = int(img_w * ratio), int(img_h * ratio)
-    resized_img = image.resize((new_w, new_h), Image.LANCZOS)
-
-    canvas = Image.new("RGB", (target_w, target_h), bg_color)
-    offset = ((target_w - new_w) // 2, (target_h - new_h) // 2)
-    canvas.paste(resized_img, offset)
-    return canvas
-
-# --- UI 界面 ---
-st.set_page_config(page_title="FB素材无损预览转换", layout="wide")
-
-st.title("🎯 Facebook 素材预览与批量处理")
-st.caption("上传图片即可实时预览不同版位的显示效果，支持一键打包下载。")
-
-# 侧边栏设置
-with st.sidebar:
-    st.header("⚙️ 全局设置")
-    bg_choice = st.radio("填充背景色", ["白色", "黑色"])
-    bg_color = (255, 255, 255) if bg_choice == "白色" else (0, 0, 0)
+    # 2. 创建目标画布并居中原图
+    # 这一步是为了生成一张带有空白边缘的参考图交给 AI
+    canvas = PIL.Image.new("RGB", target_size, (255, 255, 255))
+    offset = ((target_size[0] - src_w) // 2, (target_size[1] - src_h) // 2)
+    canvas.paste(source_img, offset)
     
-    selected_placements = st.multiselect(
-        "选择需要输出的版位", 
-        list(FB_SIZES.keys()), 
-        default=list(FB_SIZES.keys())
-    )
-    quality = st.slider("图片压缩质量", 50, 100, 95)
+    # 3. 调用 Gemini 1.5 Pro 或 Imagen 进行二次创作
+    # 注意：Gemini 目前支持通过 Multimodal Prompt 理解图片并指导生成
+    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    prompt = f"""
+    这是一张原始图片素材，我将其放置在了一个 {target_size[0]}x{target_size[1]} 的画布中央。
+    请分析原图的视觉风格、光影、纹理和主体元素。
+    任务：
+    1. 保持画布中心的原图内容完全不变。
+    2. 自动扩展并填充四周的白色空白区域。
+    3. 填充内容必须与原图无缝衔接，风格保持高度一致。
+    4. 确保输出符合 Facebook 广告版位的审美。
+    """
+    
+    # 在实际应用中，如果是调用 Imagen 模型（通过 Vertex AI），
+    # 你会发送原始图 + 遮罩图 (Mask)
+    # 以下为逻辑演示：
+    response = model.generate_content([prompt, source_img])
+    
+    # 注意：Gemini API 直接返回图像的功能在不同区域的权限不同
+    # 通常在 App 开发中，我们会通过 Vertex AI 的 Imagen API 进行 Outpainting
+    return response.text # 或者返回生成的图像对象
 
-# 上传组件
-uploaded_files = st.file_uploader("选择素材图片", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-
-if uploaded_files:
-    # 遍历每张上传的图片
-    for uploaded_file in uploaded_files:
-        img = Image.open(uploaded_file)
-        base_name = os.path.splitext(uploaded_file.name)[0]
-        
-        st.write("---")
-        st.subheader(f"🖼️ 素材名称: {uploaded_file.name}")
-        
-        # 创建预览列
-        cols = st.columns(len(selected_placements))
-        
-        # 存储当前图片的各尺寸结果
-        processed_results = {}
-        
-        for idx, p_name in enumerate(selected_placements):
-            target_dims = FB_SIZES[p_name]
-            result_img = process_image_no_blur(img, target_dims, bg_color)
-            processed_results[p_name] = result_img
-            
-            # 在对应的列展示预览
-            with cols[idx]:
-                st.image(result_img, caption=f"{p_name}\n({target_dims[0]}x{target_dims[1]})", use_container_width=True)
-
-    # 底部下载区
-    st.write("---")
-    if st.button("🚀 生成并打包所有预览图", use_container_width=True):
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
-            for uploaded_file in uploaded_files:
-                img = Image.open(uploaded_file)
-                name = os.path.splitext(uploaded_file.name)[0]
-                for p_name in selected_placements:
-                    res_img = process_image_no_blur(img, FB_SIZES[p_name], bg_color)
-                    buf = BytesIO()
-                    res_img.save(buf, format="JPEG", quality=quality)
-                    zip_file.writestr(f"{name}/{p_name.split(' ')[0]}.jpg", buf.getvalue())
-        
-        st.success("打包完成！")
-        st.download_button(
-            label="📥 下载 ZIP 压缩包",
-            data=zip_buffer.getvalue(),
-            file_name="fb_final_assets.zip",
-            mime="application/zip",
-            use_container_width=True
-        )
+# --- App 批量处理逻辑 ---
+def batch_process_for_fb(image_list, placements):
+    """
+    placements: {'Stories': (1080, 1920), 'Feed': (1080, 1080)}
+    """
+    for img_path in image_list:
+        for p_name, size in placements.items():
+            print(f"正在为 {img_path} 生成 AI 扩展版位: {p_name}...")
+            # 调用上面的 AI 函数
+            # result = generate_outpainted_asset(img_path, size)
+            # result.save(f"output_{p_name}_{img_path}")
