@@ -1,8 +1,10 @@
 import PIL.Image
 import google.generativeai as genai
+import streamlit as st
 import os
 
 # 配置 Gemini API (需在 Google AI Studio 获取 API Key)
+# 外层用双引号，内层用单引号
 genai.configure(api_key=st.secrets['GEMINI_API_KEY'])
 
 def generate_outpainted_asset(source_image_path, target_size=(1080, 1920)):
