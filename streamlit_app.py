@@ -1,55 +1,83 @@
+import streamlit as st
 import PIL.Image
 import google.generativeai as genai
-import os
+import io
 
-# 配置 Gemini API (需在 Google AI Studio 获取 API Key)
-genai.configure(api_key="AIzaSyDpRgTOj912pPfhY56noe60LSuV3s0tyl4")
+# --- 1. 配置与初始化 ---
+st.set_page_config(page_title="AI FB 素材扩展器", layout="wide")
 
-def generate_outpainted_asset(source_image_path, target_size=(1080, 1920)):
+# 修复之前的引号语法错误
+if "GEMINI_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+else:
+    st.error("未在 Secrets 中找到 GEMINI_API_KEY，请检查设置。")
+
+# Facebook 版位尺寸参考
+FB_SIZES = {
+    "Stories/Reels (9:16)": (1080, 1920),
+    "Feed (1:1)": (1080, 1080),
+    "Feed/Ads (4:5)": (1080, 1350)
+}
+
+# --- 2. 核心 AI 逻辑函数 ---
+def generate_ai_description(source_img, target_size):
     """
-    使用 AI 扩展图片背景以适配 Facebook 版位
+    使用 Gemini 分析图片并生成用于 Outpainting 的二次创作描述
     """
-    # 1. 加载原图
-    source_img = PIL.Image.open(source_image_path)
-    src_w, src_h = source_img.size
-    
-    # 2. 创建目标画布并居中原图
-    # 这一步是为了生成一张带有空白边缘的参考图交给 AI
-    canvas = PIL.Image.new("RGB", target_size, (255, 255, 255))
-    offset = ((target_size[0] - src_w) // 2, (target_size[1] - src_h) // 2)
-    canvas.paste(source_img, offset)
-    
-    # 3. 调用 Gemini 1.5 Pro 或 Imagen 进行二次创作
-    # 注意：Gemini 目前支持通过 Multimodal Prompt 理解图片并指导生成
-    model = genai.GenerativeModel('gemini-1.5-pro')
-    
+    model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = f"""
-    这是一张原始图片素材，我将其放置在了一个 {target_size[0]}x{target_size[1]} 的画布中央。
-    请分析原图的视觉风格、光影、纹理和主体元素。
-    任务：
-    1. 保持画布中心的原图内容完全不变。
-    2. 自动扩展并填充四周的白色空白区域。
-    3. 填充内容必须与原图无缝衔接，风格保持高度一致。
-    4. 确保输出符合 Facebook 广告版位的审美。
+    分析这张图片的内容。如果我要将它放在一个 {target_size[0]}x{target_size[1]} 的画布中央，
+    并自动扩展边缘空白区域，请描述应该补充什么内容以保持风格统一。
+    请以“补充内容建议：”开头。
     """
-    
-    # 在实际应用中，如果是调用 Imagen 模型（通过 Vertex AI），
-    # 你会发送原始图 + 遮罩图 (Mask)
-    # 以下为逻辑演示：
     response = model.generate_content([prompt, source_img])
-    
-    # 注意：Gemini API 直接返回图像的功能在不同区域的权限不同
-    # 通常在 App 开发中，我们会通过 Vertex AI 的 Imagen API 进行 Outpainting
-    return response.text # 或者返回生成的图像对象
+    return response.text
 
-# --- App 批量处理逻辑 ---
-def batch_process_for_fb(image_list, placements):
-    """
-    placements: {'Stories': (1080, 1920), 'Feed': (1080, 1080)}
-    """
-    for img_path in image_list:
-        for p_name, size in placements.items():
-            print(f"正在为 {img_path} 生成 AI 扩展版位: {p_name}...")
-            # 调用上面的 AI 函数
-            # result = generate_outpainted_asset(img_path, size)
-            # result.save(f"output_{p_name}_{img_path}")
+# --- 3. Streamlit UI 界面渲染 ---
+st.title("🚀 AI Facebook 素材自动扩展与预览")
+st.write("上传图片，AI 将分析并模拟如何二次创作不同尺寸的版位。")
+
+# 侧边栏设置
+with st.sidebar:
+    st.header("参数设置")
+    selected_placements = st.multiselect(
+        "选择版位", 
+        list(FB_SIZES.keys()), 
+        default=["Stories/Reels (9:16)"]
+    )
+
+# 文件上传
+uploaded_file = st.file_uploader("上传原始图片素材", type=['png', 'jpg', 'jpeg'])
+
+if uploaded_file:
+    # 展示原图
+    source_img = PIL.Image.open(uploaded_file)
+    st.subheader("✅ 原图已上传")
+    st.image(source_img, width=300)
+
+    if st.button("执行 AI 风格分析与尺寸扩展预览"):
+        # 创建多列预览
+        cols = st.columns(len(selected_placements))
+        
+        for idx, p_name in enumerate(selected_placements):
+            with cols[idx]:
+                st.write(f"**{p_name}**")
+                target_size = FB_SIZES[p_name]
+                
+                # 模拟处理：1. 缩放居中预览
+                # 这里目前使用 Python 先渲染一个预览图给用户看
+                canvas = PIL.Image.new("RGB", target_size, (240, 240, 240)) # 灰色背景模拟空白
+                img_copy = source_img.copy()
+                img_copy.thumbnail((target_size[0], target_size[1]))
+                offset = ((target_size[0] - img_copy.width) // 2, (target_size[1] - img_copy.height) // 2)
+                canvas.paste(img_copy, offset)
+                
+                st.image(canvas, use_container_width=True)
+                
+                # 2. 调用 AI 生成二次创作建议
+                with st.spinner(f"AI 正在构思 {p_name} 的扩展方案..."):
+                    ai_advice = generate_ai_description(source_img, target_size)
+                    st.info(ai_advice)
+
+else:
+    st.info("请在上方上传图片以开始。")
