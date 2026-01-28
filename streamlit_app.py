@@ -20,24 +20,35 @@ FB_SIZES = {
     "Ads Landscape (1.91:1)": (1200, 628)
 }
 
+
 def generate_ai_description(source_img, target_size_name):
     """
-    使用 Gemini 分析图片并针对特定版位给出二次创作建议
+    带有容错机制的模型调用
     """
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        分析这张图片。我需要将其适配为 Facebook 的 {target_size_name} 版位。
-        请基于原图的纹理、色彩和元素，给出具体的【二次创作背景扩展建议】。
-        要求：
-        1. 保持主体内容不变。
-        2. 描述应该在空白区域补充哪些具体的视觉元素，使其看起来像是一张原生的大图。
-        3. 语言简练，直击痛点。
-        """
-        response = model.generate_content([prompt, source_img])
-        return response.text
-    except Exception as e:
-        return f"AI 构思暂不可用: {str(e)}"
+    # 尝试模型列表，按推荐顺序排列
+    model_names = ['gemini-1.5-pro', 'gemini-1.5-flash']
+    
+    last_error = ""
+    for name in model_names:
+        try:
+            # 确保使用最新的 GenerativeModel 调用方式
+            model = genai.GenerativeModel(model_name=name)
+            
+            prompt = f"""
+            分析这张图片。我需要将其适配为 Facebook 的 {target_size_name} 版位。
+            请基于原图的纹理、色彩和元素，给出具体的【二次创作背景扩展建议】。
+            要求：1. 保持主体内容不变；2. 描述应该在空白区域补充哪些元素以实现无缝扩展。
+            """
+            
+            response = model.generate_content([prompt, source_img])
+            return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue # 如果报错，尝试下一个模型
+            
+    return f"❌ AI 构思暂不可用。报错信息: {last_error}\n提示：请检查 API Key 是否已启用 Gemini API 权限。"
+
+
 
 def create_preview(image, target_size, bg_color=(245, 245, 245)):
     """
