@@ -5,6 +5,71 @@ import io
 import time
 import random
 
+import streamlit as st
+import PIL.Image
+import google.generativeai as genai
+import io
+
+st.set_page_config(page_title="FB素材适配器-自适应版", layout="wide")
+
+# 初始化
+api_key = st.secrets.get("GEMINI_API_KEY", "")
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    st.error("🔑 未配置 API Key")
+
+FB_SIZES = {"Stories (9:16)": (1080, 1920), "Feed (1:1)": (1080, 1080)}
+
+def get_any_available_model():
+    """核心：动态获取用户账户下第一个可用的模型"""
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                return m.name
+        return "models/gemini-1.5-pro" # 强行兜底
+    except:
+        return "models/gemini-1.5-flash"
+
+# --- UI 与逻辑 ---
+with st.sidebar:
+    if st.button("🔍 自动诊断 API"):
+        try:
+            m_name = get_any_available_model()
+            test_model = genai.GenerativeModel(m_name)
+            res = test_model.generate_content("Ping", generation_config={"max_output_tokens": 5})
+            st.success(f"✅ 成功连接！使用模型: {m_name}")
+        except Exception as e:
+            st.error(f"❌ 失败: {str(e)}")
+
+uploaded_file = st.file_uploader("上传图片")
+
+if uploaded_file:
+    img = PIL.Image.open(uploaded_file)
+    if st.button("生成"):
+        target_model = get_any_available_model() # 动态获取
+        model = genai.GenerativeModel(target_model)
+        
+        # 预览与建议逻辑
+        cols = st.columns(len(FB_SIZES))
+        for idx, (name, size) in enumerate(FB_SIZES.items()):
+            with cols[idx]:
+                # 简单背景填充预览
+                canvas = PIL.Image.new("RGB", size, img.getpixel((0,0)))
+                temp_img = img.copy()
+                temp_img.thumbnail(size)
+                canvas.paste(temp_img, ((size[0]-temp_img.width)//2, (size[1]-temp_img.height)//2))
+                st.image(canvas, caption=name)
+                
+                # AI 建议
+                try:
+                    advice = model.generate_content([f"适配{name}的背景扩展建议", img])
+                    st.caption(advice.text)
+                except:
+                    st.caption("AI 建议生成失败，请检查配额。")
+
+
+
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="FB素材AI助手", layout="wide", page_icon="🎨")
 
