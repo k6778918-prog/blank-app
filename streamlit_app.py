@@ -3,7 +3,7 @@ import google.generativeai as genai
 import os
 
 # 配置 Gemini API (需在 Google AI Studio 获取 API Key)
-genai.configure(api_key="AIzaSyDpRgTOj912pPfhY56noe60LSuV3s0tyl4")
+genai.configure(api_key="st.secrets["GEMINI_API_KEY"]")
 
 def generate_outpainted_asset(source_image_path, target_size=(1080, 1920)):
     """
