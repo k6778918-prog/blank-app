@@ -24,23 +24,35 @@ FB_SIZES = {
 
 # --- 2. 新增：API 连通性测试函数 ---
 def test_gemini_connection():
-    """测试 API Key 是否有效及模型是否响应"""
+    """自动化诊断：寻找可用模型并测试连接"""
     try:
-        # 尝试列出模型，确认 Key 是否能过基础验证
-        models = genai.list_models()
-        # 尝试进行一次极简的文本生成测试
-        test_model = genai.GenerativeModel('gemini-1.5-flash')
-        response = test_model.generate_content("Ping", generation_config={"max_output_tokens": 5})
-        if response.text:
-            return True, "✅ 连接成功！API Key 有效且配额充足。"
+        # 1. 检查 API 是否能列出模型 (验证 Key 的基础有效性)
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        if not available_models:
+            return False, "❌ Key 有效但未授权任何生成模型。请在 AI Studio 启用 Gemini API。"
+
+        # 2. 自动选择列表中第一个可用的模型进行握手 (解决 404 问题)
+        test_model_name = available_models[0]
+        test_model = genai.GenerativeModel(test_model_name)
+        
+        # 极简生成测试
+        response = test_model.generate_content("Hi", generation_config={"max_output_tokens": 5})
+        
+        if response:
+            return True, f"✅ 连接成功！已自动匹配模型：{test_model_name}"
+            
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg:
-            return False, "⚠️ 触发频率限制 (429)：Key 有效但请求太快，请等 60 秒。"
-        elif "API_KEY_INVALID" in error_msg or "403" in error_msg:
-            return False, "❌ API Key 无效：请检查 Secrets 中的 Key 是否复制正确。"
+            return False, "⚠️ 频率限制：Key 正常但请求太快。"
+        elif "API_KEY_INVALID" in error_msg:
+            return False, "❌ Key 错误：请检查 Secrets 中的字符串。"
         else:
-            return False, f"❌ 连接失败：{error_msg}"
+            return False, f"❌ 诊断失败：{error_msg}"
 
 # --- 3. 核心逻辑函数 ---
 def get_usable_model():
